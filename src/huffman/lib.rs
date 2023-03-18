@@ -1,24 +1,39 @@
 use std::collections::HashMap;
 use std::collections::BinaryHeap;
 use std::cmp::Reverse;
-use bitvec::prelude::*;
+use std::slice::Iter;
+use bitvec::prelude::BitVec;
 
+/// A node in the Huffman tree
+///
+/// # Possible Values
+/// 
+/// - Root{left: Node, right: Node}
+/// - Leaf(u8)
 #[derive(Debug,Eq,PartialEq, PartialOrd,Ord)]
 enum Node {
     Root{left: Box<Node>, right: Box<Node>},
     Leaf(u8),
 }
 
-#[derive(Debug)]
-pub struct Metadata {
-    character_sequence: String,
-    tree_encoding: String,
+pub type Codeword = BitVec<u8>;
+
+pub struct FileData {
+    characters: Vec<u8>,
+    tree: Codeword,
+    text: Codeword,
 }
 
 use Node::*; 
 
 
-// text -> min heap for char count
+/// Takes text and returns a Nodes of characters found, sorted by least used
+///
+/// # Params
+/// text: &str; string 
+///
+/// # Returns
+/// sorted_nodes: BinaryHeap<(Reverse<usize>, Node)>
 fn frequency(text: &str) -> BinaryHeap<(Reverse<usize>, Node)> {
     let mut occurence_map: HashMap<u8, usize> = HashMap::new();
 
@@ -32,7 +47,10 @@ fn frequency(text: &str) -> BinaryHeap<(Reverse<usize>, Node)> {
         .collect()
 }
 
-// compile occurences into tree
+/// Takes text and returns Huffman tree for text
+/// 
+/// # Returns
+/// root: Node; recursive structure can be Root or Leaf
 fn huffman_tree(text: &str) -> Node {
     let mut frequencies = frequency(text); 
 
@@ -49,19 +67,16 @@ fn huffman_tree(text: &str) -> Node {
     }
 }
 
-/***
-    returns huffman table (character, length, value)
-    returns huffman table, that is a vector with:
-        character: u8,
-        code: bitvec
-  */
-pub fn huffman_table(text: &str) -> Vec<(u8, BitVec)> {
-    let tree = huffman_tree(text); 
-    let mut table: Vec<(u8, BitVec)> = Vec::new();
+/// takes text and returns huffman table (character, code)
+/// 
+/// # Returns
+/// Vec<(character: u8, code: Bitvec)>
+fn huffman_table(tree: &Node) -> HashMap<u8, Codeword> {
+    let mut table: HashMap<u8, Codeword> = HashMap::new();
 
-    fn explore_branch(table: &mut Vec<(u8, BitVec)>, node: &Node, code: BitVec) {
+    fn explore_branch(table: &mut HashMap<u8, Codeword>, node: &Node, code: Codeword) {
         match node {
-            Leaf(c) => {table.push((*c, code));},
+            Leaf(c) => {table.insert(*c, code);},
             Root { left, right } => {
                 explore_branch(table, left, {
                     let mut new_code = code.clone();
@@ -77,82 +92,132 @@ pub fn huffman_table(text: &str) -> Vec<(u8, BitVec)> {
             }
         }
     }
-    explore_branch(&mut table, &tree, bitvec![]); 
+    explore_branch(&mut table, &tree, Codeword::new()); 
 
     table
 }
 
 
-pub fn huffman_encoding_metadata(text: &str) -> Metadata {
-    let tree  = huffman_tree(text); 
+/// takes huffman tree and returns character list and huffman encoding
+/// 
+/// # Returns 
+/// Vec<u8>: characters in tree, in order from left to right
+/// Bitvec: encoding of tree
+/// 
+/// # References
+/// https://www.cs.scranton.edu/~mccloske/courses/cmps340/huff_tree_encoding.html
+fn huffman_encode_tree(root: &Node) -> (Vec<u8>, Codeword) {
+    let mut char_order: Vec<u8> = Vec::new();
+    let mut tree_encoding = Codeword::new();
 
-    let character_sequence: String = huffman_table(text)
-        .iter()
-        .map(|(c,_)| *c as char)
-        .collect();
-
-    let mut tree_encoding = String::new(); 
-    fn explore_branch(node: &Node, tree_encoding: &mut String) {
-        match node {
-            Leaf(_) => {},
+    // recursively explore tree to find order of characters and encoding of tree
+    fn explore_tree(tree: &Node, characters: &mut Vec<u8>, tree_encoding: &mut Codeword) {
+        match tree {
             Root { left, right } => {
-                explore_branch(left, tree_encoding); 
-                tree_encoding.push('0');
-                explore_branch(right, tree_encoding); 
-                tree_encoding.push('1');
+                tree_encoding.push(false);
+                explore_tree(left, characters, tree_encoding);
+
+                tree_encoding.push(true);
+                explore_tree(right, characters, tree_encoding);
+            }
+            Leaf(character) => {
+                characters.push(*character);
             }
         }
     }
-    explore_branch(&tree, &mut tree_encoding); 
-    
-    Metadata{character_sequence, tree_encoding }
+    explore_tree(root, &mut char_order, &mut tree_encoding);
+
+    (char_order, tree_encoding)
 }
 
-/***
-    take text, and return string wich can be written to file
-  */
-pub fn huffman_encoding(text: &str) -> String {
-
-    // get metadata, add character sequence and tree encoding
-    let metadata = huffman_encoding_metadata(text); 
-
-    let mut res = String::from(metadata.character_sequence); 
-    res.push_str(&metadata.tree_encoding); 
-
-
-
-    // encode with tree 
-    let table = huffman_table(text); 
-
-
-    res
+/// Takes huffman tree and text and returns encoded text back
+/// 
+/// # Returns 
+/// 
+/// 
+fn huffman_encode_text(text: &str, code_table: &HashMap<u8, Codeword>) -> Codeword {
+    text.bytes()
+        .map(|character| code_table.get(&character).expect("character in text, but not in tree"))
+        .fold(Codeword::new(), |mut acc, code| {acc.extend(code); acc})
 }
+
+
+
+/// Takes and returns encoded text
+/// 
+/// # Returns 
+/// Bitvec, which contains:
+/// - characters 
+/// - encoded tree
+/// - encoded text
+pub fn huffman_encode(text: &str) -> FileData {
+    let tree = huffman_tree(text); 
+    let code_table = huffman_table(&tree);
+
+    let text = huffman_encode_text(text, &code_table);
+    let (characters, tree) = huffman_encode_tree(&tree);
+
+    FileData { characters, tree, text}
+}
+
+/// Take character list and tree and return hashmap of char -> code
+fn huffman_decode_tree(characters: &Vec<u8>, tree: &Codeword) -> HashMap<u8, Codeword> {
+    let mut character = characters.iter();
+    let mut code: Codeword = Codeword::new();
+    let mut result: HashMap<u8, Codeword> = HashMap::new();
+
+
+    // recursive function when reaching end, isert into hashmap 
+    // when 0 then not at the end yet, continue recursive call
+    // when 1 then end of one branch, add node with 2 leafs, one for 0 and other for 1
+
+
+    // when 0 add it to current code
+    // when 1 means last number was an end: 
+    // - add the other number to hashmap
+    // - remove from code while poped value == 1
+    // - append 1 to it
+    for bit in tree.iter() {
+        match *bit {
+            true => {
+                // add number to hashmap 
+                result.insert(*character.next().expect("not enough characters for this tree"),code.clone());
+
+                // remove from code until first false
+                while code.pop().unwrap() {}
+
+                // append 1 to code
+                code.push(true);
+            },
+            false => {
+                code.push(false);
+            },
+        }
+    }
+    result.insert(*character.next().expect("not enough characters for this tree"),code);
+
+    result
+}
+
+
+/// Decodes text in codeword
+///
+/// # Returns 
+//pub fn huffman_decode(filedata: &FileData) -> String {
+//
+//}
+
+
 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
-    fn frequency_test_short() {
-        let s = "acab";
-        let mut result   = frequency(s); 
-        let mut expected = BinaryHeap::from([
-                                            (Reverse(2), Leaf(b'a')),
-                                            (Reverse(1), Leaf(b'b')),
-                                            (Reverse(1), Leaf(b'c'))]);
-
-        loop {
-            match (result.pop(),expected.pop()) {
-                (Some(a), Some(b)) => assert_eq!(a, b),
-                (None, None) => break,
-                _ => assert!(false)
-            }
-        }
-    }
-
-    #[test]
-    fn frequency_test_long() {
+    fn test_frequency() {
         let s = "this is an example of a huffman tree";
         let mut result = frequency(s); 
         let mut expected = BinaryHeap::from([
@@ -183,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_test_short_1() {
+    fn test_huffman_tree_short() {
         let text = "acab";
         let tree = huffman_tree(text); 
         let correct = Root { 
@@ -196,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_test_short_2() {
+    fn test_huffman_tree_long() {
         let text = "abcd";
         let tree = huffman_tree(text); 
         let correct = Root { 
@@ -211,18 +276,18 @@ mod tests {
     }
 
     #[test]
-    fn table_long() { 
+    fn test_huffman_table() { 
         let text = "this is an example of a huffman tree";
         let frequencies: HashMap<u8, usize> = frequency(text).into_iter()
             .filter_map(|(Reverse(count), character)| match character {
-                Node::Leaf(ch) => Some((ch, count)),
+                Leaf(ch) => Some((ch, count)),
                 _ => None
-                
-            })
-            .collect(); 
 
-        // (length_of_code, count_of_char)
-        let mut table: Vec<(usize, usize)> = huffman_table(text).into_iter() 
+            })
+        .collect(); 
+
+        // to sorted vec of (length_of_code, count_of_char)
+        let mut table: Vec<(usize, usize)> = huffman_table(&huffman_tree(text)).into_iter() 
             .map(|(character, code)| (code.len(), *frequencies.get(&character).unwrap()))
             .collect(); 
         table.sort();
@@ -234,5 +299,46 @@ mod tests {
             assert!(last_code_len <= code_len); 
             last_code_len = code_len; 
         }
+    }
+
+    #[test]
+    fn test_huffman_encode_tree(){
+        let text = "this is an example of a huffman tree";
+        let textmap: HashSet<u8> = text.bytes().collect();
+        let tree = huffman_tree(text);
+        let (characters, tree_encoding) = huffman_encode_tree(&tree);
+
+        fn count_edges(node: &Node) -> usize {
+            match node {
+                Root { left, right }    => 2 + count_edges(left) + count_edges(right),
+                Leaf(_)                 => 0,
+            }
+        }
+        let acc = count_edges(&tree);
+        
+        assert_eq!(characters.len(), textmap.len());
+        assert_eq!(tree_encoding.len(), acc)
+
+    }
+
+    /*
+    #[test]
+    fn test_huffman_decode() {
+
+    }
+    */
+
+    #[test]
+    fn test_huffman_decode_tree() {
+        let text = "this is a test string for encode and decode";
+        //let text = "ab";
+        let encoded: FileData = huffman_encode(text);
+        let tree = huffman_tree(text);
+        let table = huffman_table(&tree);
+
+        let decoded_table = huffman_decode_tree(&encoded.characters, &encoded.tree);
+        
+
+        assert_eq!(table, decoded_table);
     }
 }
