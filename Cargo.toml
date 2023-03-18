@@ -9,3 +9,4 @@ name = "huffman"
 path = "src/huffman/lib.rs"
 
 [dependencies]
+bitvec = "1"
