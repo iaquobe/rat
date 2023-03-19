@@ -161,16 +161,10 @@ pub fn huffman_encode(text: &str) -> FileData {
 }
 
 /// Take character list and tree and return hashmap of char -> code
-fn huffman_decode_tree(characters: &Vec<u8>, tree: &Codeword) -> HashMap<u8, Codeword> {
+fn huffman_decode_tree(characters: &Vec<u8>, tree: &Codeword) -> HashMap<Codeword, u8> {
     let mut character = characters.iter();
     let mut code: Codeword = Codeword::new();
-    let mut result: HashMap<u8, Codeword> = HashMap::new();
-
-
-    // recursive function when reaching end, isert into hashmap 
-    // when 0 then not at the end yet, continue recursive call
-    // when 1 then end of one branch, add node with 2 leafs, one for 0 and other for 1
-
+    let mut result: HashMap<Codeword, u8> = HashMap::new();
 
     // when 0 add it to current code
     // when 1 means last number was an end: 
@@ -181,7 +175,7 @@ fn huffman_decode_tree(characters: &Vec<u8>, tree: &Codeword) -> HashMap<u8, Cod
         match *bit {
             true => {
                 // add number to hashmap 
-                result.insert(*character.next().expect("not enough characters for this tree"),code.clone());
+                result.insert(code.clone(),*character.next().expect("not enough characters for this tree"));
 
                 // remove from code until first false
                 while code.pop().unwrap() {}
@@ -194,7 +188,7 @@ fn huffman_decode_tree(characters: &Vec<u8>, tree: &Codeword) -> HashMap<u8, Cod
             },
         }
     }
-    result.insert(*character.next().expect("not enough characters for this tree"),code);
+    result.insert(code, *character.next().expect("not enough characters for this tree"));
 
     result
 }
@@ -203,9 +197,26 @@ fn huffman_decode_tree(characters: &Vec<u8>, tree: &Codeword) -> HashMap<u8, Cod
 /// Decodes text in codeword
 ///
 /// # Returns 
-//pub fn huffman_decode(filedata: &FileData) -> String {
-//
-//}
+pub fn huffman_decode(filedata: &FileData) -> String {
+    let code_table: HashMap<Codeword, u8> = huffman_decode_tree(&filedata.characters, &filedata.tree);
+
+    // read from encoded text until bitvec found in table -> clear code
+    let mut code = Codeword::new();
+    let mut bytes = Vec::new();
+
+    for bit in filedata.text.iter() {
+        code.push(*bit);
+        match code_table.get(&code) {
+            Some(character) => {
+                bytes.push(*character);
+                code.clear();
+            },
+            None => {},
+        }
+    }
+    
+    String::from_utf8(bytes).unwrap()
+}
 
 
 
@@ -334,11 +345,25 @@ mod tests {
         //let text = "ab";
         let encoded: FileData = huffman_encode(text);
         let tree = huffman_tree(text);
-        let table = huffman_table(&tree);
+        let table: HashMap<Codeword, u8> = huffman_table(&tree)
+            .into_iter()
+            .map(|(v,k)| (k,v))
+            .collect();
 
         let decoded_table = huffman_decode_tree(&encoded.characters, &encoded.tree);
         
 
         assert_eq!(table, decoded_table);
+    }
+
+    #[test]
+    fn test_huffman_decode() {
+        let text = "this is a test string for encode and decode";
+        //let text = "ab";
+        let encoded: FileData = huffman_encode(text);
+        let decoded = huffman_decode(&encoded);
+        
+
+        assert_eq!(text, decoded);
     }
 }
